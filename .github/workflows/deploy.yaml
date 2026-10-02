@@ -1,4 +1,4 @@
-name: Build and Deploy
+name: Blue-Green Deploy
 
 on:
   push:
@@ -12,20 +12,19 @@ permissions:
 env:
   ACR_LOGIN_SERVER: fastapik8sdemo.azurecr.io
   IMAGE_NAME: fastapi-k8s-demo
-  AKS_RESOURCE_GROUP: rg-fastapi-k8s
-  AKS_CLUSTER_NAME: fastapi-aks
 
 jobs:
-  build-and-deploy:
+  blue-green-deploy:
     runs-on: ubuntu-latest
 
     steps:
 
-      # 1. Checkout source
+      # 1. Checkout
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Login to Azure using GitHub OIDC
+
+      # 2. Login to Azure using OIDC
       - name: Azure Login
         uses: azure/login@v2
         with:
@@ -33,12 +32,14 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+
       # 3. Login to ACR
       - name: Login to ACR
         run: |
           az acr login --name fastapik8sdemo
 
-      # 4. Build Docker image
+
+      # 4. Build image
       - name: Build image
         run: |
           docker build \
@@ -47,11 +48,13 @@ jobs:
             -t $ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }} \
             .
 
-      # 5. Push image to ACR
+
+      # 5. Push image
       - name: Push image
         run: |
           docker push \
             $ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}
+
 
       # 6. Configure kubectl
       - name: Configure kubectl
@@ -77,17 +80,57 @@ jobs:
 
           kubectl config use-context fastapi-aks
 
-      # 7. Update Deployment image
-      - name: Deploy Green
-        run: |
-          kubectl set image deployment/fastapi-green \
-          fastapi=$ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}
 
-      - name: Verify Green rollout
+      # 7. Determine active and inactive environment
+      - name: Determine deployment target
+        id: target
         run: |
-          kubectl rollout status deployment/fastapi-green
+          ACTIVE=$(kubectl get service fastapi-service \
+            -o jsonpath='{.spec.selector.version}')
 
-      # 8. Wait for rollout
+          if [ "$ACTIVE" = "blue" ]; then
+            TARGET="green"
+          else
+            TARGET="blue"
+          fi
+
+          echo "Active environment: $ACTIVE"
+          echo "Target environment: $TARGET"
+
+          echo "active=$ACTIVE" >> "$GITHUB_OUTPUT"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+
+
+      # 8. Deploy new version to inactive environment
+      - name: Deploy inactive environment
+        env:
+          TARGET: ${{ steps.target.outputs.target }}
+        run: |
+          kubectl set image deployment/fastapi-$TARGET \
+            fastapi=$ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}
+
+
+      # 9. Wait for rollout
       - name: Verify rollout
+        env:
+          TARGET: ${{ steps.target.outputs.target }}
         run: |
-          kubectl rollout status deployment/fastapi-deployment
+          kubectl rollout status \
+            deployment/fastapi-$TARGET \
+            --timeout=180s
+
+
+      # 10. Switch traffic
+      - name: Switch traffic
+        env:
+          TARGET: ${{ steps.target.outputs.target }}
+        run: |
+          kubectl patch service fastapi-service \
+            -p "{\"spec\":{\"selector\":{\"app\":\"fastapi\",\"version\":\"$TARGET\"}}}"
+
+
+      # 11. Verify Service
+      - name: Verify traffic switch
+        run: |
+          kubectl get service fastapi-service
+          kubectl get endpoints fastapi-service
