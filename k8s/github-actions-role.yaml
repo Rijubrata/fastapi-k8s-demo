@@ -10,7 +10,9 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "patch"]
 
   - apiGroups: [""]
-    resources: ["services"]
+    resources:
+      - services
+      - endpoints
     verbs: ["get", "list", "watch", "create", "update", "patch"]
 
   - apiGroups: [""]
