@@ -1,0 +1,82 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ACR_LOGIN_SERVER: fastapik8sdemo.azurecr.io
+  IMAGE_NAME: fastapi-k8s-demo
+  AKS_RESOURCE_GROUP: rg-fastapi-k8s
+  AKS_CLUSTER_NAME: fastapi-aks
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # 1. Checkout source
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Login to Azure using GitHub OIDC
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # 3. Login to ACR
+      - name: Login to ACR
+        run: |
+          az acr login --name fastapik8sdemo
+
+      # 4. Build Docker image
+      - name: Build image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --provenance=false \
+            -t $ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }} \
+            .
+
+      # 5. Push image to ACR
+      - name: Push image
+        run: |
+          docker push \
+            $ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}
+
+      # 6. Configure kubectl
+      - name: Configure kubectl
+        run: |
+          kubectl config set-cluster fastapi-aks \
+            --server="${{ secrets.AKS_SERVER }}" \
+            --certificate-authority-data="${{ secrets.AKS_CA }}"
+
+          kubectl config set-credentials github-actions \
+            --token="${{ secrets.AKS_TOKEN }}"
+
+          kubectl config set-context fastapi-aks \
+            --cluster=fastapi-aks \
+            --user=github-actions \
+            --namespace=default
+
+          kubectl config use-context fastapi-aks
+
+      # 7. Update Deployment image
+      - name: Deploy
+        run: |
+          kubectl set image deployment/fastapi-deployment \
+            fastapi=$ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}
+
+      # 8. Wait for rollout
+      - name: Verify rollout
+        run: |
+          kubectl rollout status deployment/fastapi-deployment
