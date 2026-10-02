@@ -7,7 +7,7 @@ app = FastAPI(title="FastAPI K8s Demo")
 def root():
     return {
         "message": "Hello from FastAPI",
-        "version": "v1"
+        "version": "v2.0.0",
     }
 
 
