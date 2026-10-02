@@ -56,9 +56,12 @@ jobs:
       # 6. Configure kubectl
       - name: Configure kubectl
         run: |
+          echo "${{ secrets.AKS_CA }}" | base64 --decode > /tmp/aks-ca.crt
+
           kubectl config set-cluster fastapi-aks \
             --server="${{ secrets.AKS_SERVER }}" \
-            --certificate-authority-data="${{ secrets.AKS_CA }}"
+            --certificate-authority=/tmp/aks-ca.crt \
+            --embed-certs=true
 
           kubectl config set-credentials github-actions \
             --token="${{ secrets.AKS_TOKEN }}"
